@@ -50,60 +50,71 @@ psic = float(opts.psic)
 
 for eosname in eosnames:
 
-	shortname = (eosname.split('.')[0]).split('eos-')[-1]
-	if verb == True: print('Calculate properties of '+str(shortname)+' stars')
+        shortname = (eosname.split('.')[0]).split('eos-')[-1]
+        if verb == True: print('Calculate properties of '+str(shortname)+' stars')
 
-	eospath = indir+eosname
-	outfile = open(outdir+tag+shortname+".csv","w")
-	outfile.write('rhoc,'+','.join(props)+'\n')
-	
-	eosdat = np.genfromtxt(eospath,names=True,delimiter=',')
-	rhodat = eosdat['baryon_density'] # rest-mass energy density in units of g/cm^3
-	pdat = eosdat['pressurec2'] # pressure in units of g/cm^3
-	mudat = eosdat['energy_densityc2'] # total energy density in units of g/cm^3
-	
-	rhop = interp1d(pdat,rhodat,kind='linear',bounds_error=False,fill_value=0)
-	def Rho(p): return rhop(p)
-	
-	mup = interp1d(pdat,mudat,kind='linear',bounds_error=False,fill_value=0)
-	def mu(p): return mup(p)
-		
-	prho = interp1d(rhodat,pdat,kind='linear',bounds_error=False,fill_value=0)
-	def P(rho): return prho(rho)
-		
-	cs2pi = interp1d(pdat,np.gradient(mudat,pdat),kind='linear', bounds_error=False, fill_value=0)
-	def cs2i(p): return cs2pi(p) # 1/sound speed squared
-	
-	rhocs = np.linspace(max(rhoi*rhonuc,rhodat[0]),min(rhof*rhonuc,rhodat[-1]),numrhoc)
-	
-	properties = np.zeros((numrhoc,numprops+1))
-	
-	i = 0
-	if verb == True: print('Start at central density {0} g/cm^3'.format(rhocs[0]))
-	for rhoc in rhocs: # compute macroscopic properties for star of each central density
-	
-		macro = tov([mu,P,cs2i,Rho],rhoc,psic,omega,props,stp,numpts,maxr,tol)
-		properties[i] = [item for List in [[rhoc],macro] for item in List]
-		
-		psic = psic + macro[-3]
-		
-		def boundarycondition(omega): 
-			return (tov([mu,P,cs2i,Rho],rhoc,psic,omega,props,stp,numpts,maxr,tol)[-1])
-		
-		#root = minimize_scalar(boundarycondition, bounds = (1000*2*np.pi,3000*2*np.pi), method = 'bounded', options = {'maxiter': 100, 'xatol': 1e-3})
-		
-		root1 = root_scalar(boundarycondition, args=(), method='secant', x0=2000*2*np.pi, x1=2200*2*np.pi, xtol=10**-6) 
-				    
-		#bracket=(1000*2*np.pi,3000*2*np.pi))
-		
-		
-		omega = root1.root
-		
-		properties[i,-2] = omega
-		
-		properties[i,-1] = boundarycondition(omega)
-		
-		i = i+1 
+        eospath = indir+eosname
+        outfile = open(outdir+tag+shortname+".csv","w")
+        outfile.write('rhoc,'+','.join(props)+'\n')
+        
+        eosdat = np.genfromtxt(eospath,names=True,delimiter=',')
+        rhodat = eosdat['baryon_density'] # rest-mass energy density in units of g/cm^3
+        pdat = eosdat['pressurec2'] # pressure in units of g/cm^3
+        mudat = eosdat['energy_densityc2'] # total energy density in units of g/cm^3
+        
+        rhop = interp1d(pdat,rhodat,kind='linear',bounds_error=False,fill_value=0)
+        def Rho(p): return rhop(p)
+        
+        mup = interp1d(pdat,mudat,kind='linear',bounds_error=False,fill_value=0)
+        def mu(p): return mup(p)
+                
+        prho = interp1d(rhodat,pdat,kind='linear',bounds_error=False,fill_value=0)
+        def P(rho): return prho(rho)
+                
+        cs2pi = interp1d(pdat,np.gradient(mudat,pdat),kind='linear', bounds_error=False, fill_value=0)
+        def cs2i(p): return cs2pi(p) # 1/sound speed squared
+        
+        rhocs = np.linspace(max(rhoi*rhonuc,rhodat[0]),min(rhof*rhonuc,rhodat[-1]),numrhoc)
+        
+        properties = np.zeros((numrhoc,numprops+1))
+        
+        i = 0
+        if verb == True: print('Start at central density {0} g/cm^3'.format(rhocs[0]))
+        for rhoc in rhocs: # compute macroscopic properties for star of each central density
 
-	if verb == True: print('Done at central density {0} g/cm^3\nSave to '.format(rhocs[-1])+outdir+tag+shortname+'.csv')
-	np.savetxt(outfile,properties,delimiter=',')
+                intermediate_macro = tov([mu,P,cs2i,Rho],rhoc,psic,
+                                         omega,["R", "M","nu"],
+                                         stp, numpts, maxr, tol)
+                nu_found = intermediate_macro[-1]
+                R_found = intermediate_macro[-3]
+                M_found = intermediate_macro[-2]
+                G_over_c2_M_sun = 1.477 
+                nu_desired = np.log(1-2*G_over_c2_M_sun*M_found/R_found)
+                nu_adjustment = nu_desired - nu_found
+                
+                macro = tov([mu,P,cs2i,Rho],rhoc,psic,omega,props,stp,numpts,maxr,tol, nu_adjustment = nu_adjustment)
+                properties[i] = [item for List in [[rhoc],macro] for item in List]
+                
+                
+                #psic = psic + macro[-3]
+                
+                def boundarycondition(omega): 
+                        return (tov([mu,P,cs2i,Rho],rhoc,psic,omega,props,stp,numpts,maxr,tol)[-1])
+                
+                #root = minimize_scalar(boundarycondition, bounds = (1000*2*np.pi,3000*2*np.pi), method = 'bounded', options = {'maxiter': 100, 'xatol': 1e-3})
+                
+                #root1 = root_scalar(boundarycondition, args=(), method='secant', x0=2000*2*np.pi, x1=2200*2*np.pi, xtol=10**-6) 
+                                    
+                #bracket=(1000*2*np.pi,3000*2*np.pi))
+                
+                
+                #omega = root1.root
+                
+                #properties[i,-2] = omega
+                
+                #properties[i,-1] = boundarycondition(omega)
+                
+                i = i+1 
+
+        if verb == True: print('Done at central density {0} g/cm^3\nSave to '.format(rhocs[-1])+outdir+tag+shortname+'.csv')
+        np.savetxt(outfile,properties,delimiter=',')

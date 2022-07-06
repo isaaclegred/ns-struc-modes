@@ -1,0 +1,10 @@
+# build
+*build
+# eos
+*eos
+# macro
+*dat
+# python
+*__pycache__*
+*.egg
+

@@ -5,6 +5,7 @@ from scipy.special import hyp2f1
 from .constants import *
 
 exp = np.exp
+log = np.log
 fourpi = 4 * pi
 # DEFINE TOV AND PERTURBATION EQUATIONS
 
@@ -121,42 +122,84 @@ def nu_metric_param(r, y, *args):
         return 2 * (fourpi * r * r * r * G / c**2 * p + M)/(r * (r - 2 * M))
 
 
-# This is not the RHS for any equation but it's needed in a couple places places
-def _m2(r, m, nu, p, mu, omega_1, beta,  h2):
-        f = 1 - 2 * m / r  
-        return -r * (f) * h2 + 1/6 * r**3 * omega_1**2 * np.exp(-nu) * f * (
-                f * beta**2 + 16 * np.pi  * r**2  * G * (mu + p)/c**2
-        )
 # To see how these equations are derived See Y+Y https://arxiv.org/pdf/1303.1528.pdf
 # and the example file eqn_generation.py.  these are the quadratic-in-Omega slow-rotation
 # component functions that determine the quadrupole moment
-def quadratic_K2(r, y, *args):
+
+def nuR(r, p, M):
+        return (8*pi * p * r**3 + 2*M)/(r*(r-2*M))
+
+def _h2_homog_helper(r, v2, h2, M, p, mu):
+        # geometrized units, cm
+        nuR_here = nuR(r, p, M)
+        #print("nuR is", nuR_here)
+        #print("counterterm is", r / ((r - 2*M) * nuR_here) * (8*pi * (mu + p) - 4*M / r**3))
+        return (-nuR_here +  r / ((r - 2*M) * nuR_here) * (8*pi * (mu + p) - 4*M / r**3)) * h2 - 4 * v2 / (r * nuR_here * (r - 2*M))
+        
+
+def quadratic_h2_homog(r, y, *args):
         props = args[-1]
         p = y[props.index('R')]
+        M = G / c**2 * y[props.index('M')]
+        h2 = y[props.index('h2_homog')]
+        v2 = y[props.index('v2_homog')]
+        mu = args[0]
+
+        f = 1 - 2 * M / r
+        output = _h2_homog_helper(r, v2, h2, M, G/c**2*p, G/c**2*mu(p))
+        #print("M is in cm", M)
+        #print("4*M/r**3 is in cm^-2", 4*M/r**3)
+        #print("8*pi*(p+eps)", 8*pi * G/c**2 * (p + mu(p)))
+        
+        #print("r is", r)
+        #print("h2  is", h2)
+        #print("dh2dr is", output)
+        return output
+def _v2_homog_helper(r, v2, h2, M, p):
+        # Geometrized units, cm
+        return -nuR(r, p, M) * h2
+def quadratic_v2_homog(r, y, *args):
+        props = args[-1]
+        p = y[props.index('R')]
+        M = G*y[props.index('M')]/c**2
+        h2 = y[props.index('h2_homog')]
+        v2 = y[props.index('v2_homog')]
+        
+
+        output = _v2_homog_helper(r, v2, h2, M, G*p/c**2)
+        #print("v2_deriv is", output)
+        #print("v2 is", v2)
+        return output
+
+def j_square(f, nu):
+        return f*np.exp(-nu)
+def j_square_deriv(M, r, nu, nuR, mu, f):
+        return (2*M/r**2 - 8*pi*mu*r - nuR * f) * np.exp(-nu) 
+
+def quadratic_v2(r, y, *args):
+        props = args[-1]
+        p = G/c**2*y[props.index('R')]
         M = G / c**2  * y[props.index('M')]
         omega1 = y[props.index('framedrag')]
         beta = y[props.index('I')]
         h2 = y[props.index('h2')]
-        K2 = y[props.index('K2')]
+        v2 = y[props.index('v2')]
         nu = y[props.index('nu')]
-        
-        
+
         mu = args[0]
 
-        m2 = _m2(r, M, nu, p, mu(p), omega1, beta, h2)
-        f = 1 - 2 * M / r  
-        def evaluate(r, K2, h2, M, p,  m2, mu, f, beta, omega1, nu):
-                x0 = r**2
-                x1 = -r
-                x2 = f*r
-                x3 = 4*pi
-                x4 = p*r**3*x3
-                x5 = omega1**2
-                x6 = mu + p
-                x7 = exp(nu)
-                x8 = m2*x7
-                return (-1/12*beta**2*f**2*r**4*x5 - f**4*r*x8*(8*pi*p*x0 + 1) + f**3*x0*x7*(-2*K2 + h2*(x0*x3*x6 - 3)) + (4/3)*pi*f*r**6*x5*x6 - h2*x2*x7*(3*M + x1 + x4) + x8*(-M + r + x4))*exp(-nu)/(f*x0*(M + x1 + x2 - x4))
-        return evaluate(r, K2, h2, M, G/c**2*p, m2, G/c**2*mu(p), f, beta, omega1, nu)
+        f = 1 - 2 * M / r
+        # Eq 125 1967ApJ...150.1005H 
+        def evaluate_inhomog(r, M, p, mu, f, beta, omega1, nu):
+                nuR_here = nuR(r, p, M)
+                jsquare = j_square(f, nu)
+                jsquarederiv = j_square_deriv(M, r, nu, nuR_here, mu, f)
+                return ((1  + r*nuR_here / 2) *  (omega1*r)**2 / 3 *
+                        (-jsquarederiv  + 1 / (2*r) * jsquare * beta**2 ))
+
+        homog_part = _v2_homog_helper(r, v2, h2, M, G/c**2*p)
+        inhomog_part = evaluate_inhomog(r, M, G/c**2*p, G/c**2*mu(p), f, beta, omega1, nu)
+        return homog_part + inhomog_part
 
 def quadratic_h2(r, y, *args):
         props = args[-1]
@@ -165,94 +208,39 @@ def quadratic_h2(r, y, *args):
         omega1 = y[props.index('framedrag')]
         beta = y[props.index('I')]
         h2 = y[props.index('h2')]
-        K2 = y[props.index('K2')]
+        v2 = y[props.index('v2')]
         nu = y[props.index('nu')]
                 
         mu = args[0]
-
-        m2 = _m2(r, M, nu, p, mu(p), omega1, beta, h2)
         f = 1 - 2 * M / r 
-        def evaluate(r, K2, h2, M, p, m2, mu, f, beta, omega1, nu):
-            x0 = f**2
-            x1 = r**3
-            x2 = -r
-            x3 = f*r
-            x4 = 4*pi
-            x5 = p*x1*x4
-            x6 = M + x2 + x3 - x5
-            x7 = omega1**2
-            x8 = beta**2*r**4*x0*x7
-            x9 = mu + p
-            x10 = 16*pi*f*r**6*x7*x9
-            x11 = r**2
-            x12 = 12*exp(nu)
-            x13 = m2*x12
-            x14 = f**4*r*x13*(8*pi*p*x11 + 1)
-            x15 = f**3*x11*x12*(2*K2 - h2*(x11*x4*x9 - 3))
-            x16 = -M + r + x5
-            return (1/12)*(-x10*x6 + x14*x6 + x15*x6 + x16*(h2*x12*x3*(3*M + x2 + x5) - x10 - x13*x16 + x14 + x15 + x8) + x6*x8)*exp(-nu)/(x0*x1*x6)
-
-        return evaluate(r, K2, h2, M, G/c**2*p, m2, G/c**2*mu(p), f, beta, omega1, nu)
-
-
-def quadratic_h2_homog(r, y, *args):
-        props = args[-1]
-        p = y[props.index('R')]
-        M = G / c**2 * y[props.index('M')]
-        omega1 = y[props.index('framedrag')]
-        beta = y[props.index('I')]
-        h2 = y[props.index('h2_homog')]
-        K2 = y[props.index('K2_homog')]
-        nu = y[props.index('nu')]
-        mu = args[0]
-
-        m2 = _m2(r, M, nu, p, mu(p), omega1, beta, h2)
-        f = 1 - 2 * M / r  
-        def evaluate(r, K2, h2, M, p, m2, mu, f, beta, omega1, nu):
-                x0 = r**2
-                x1 = 4*pi
-                x2 = r**3*x1
-                x3 = p*x2
-                x4 = M + f*r - r - x3
-                x5 = 2*K2
-                return (r*x4*(-h2*(x0*x1*(mu + p) - 3) + x5) + (-M + r + x3)*(3*M*h2 - h2*mu*x2 + 2*h2*r + r*x5))/(f*x0*x4)
-        output =  evaluate(r, K2, h2, M, G/c**2*p, m2, G/c**2*mu(p), f, beta, omega1, nu)
-        print("r is", r)
-        print("h2  is", output)
-        return(output)
-def quadratic_K2_homog(r, y, *args):
-        props = args[-1]
-        p = y[props.index('R')]
-        M = G*y[props.index('M')]/c**2
-        omega1 = y[props.index('framedrag')]
-        beta = y[props.index('I')]
-        h2 = y[props.index('h2_homog')]
-        K2 = y[props.index('K2_homog')]
-        nu = y[props.index('nu')]
         
-        mu = args[0]
+        homog_part = _h2_homog_helper(r, v2, h2, M, G/c**2*p, G/c**2*mu(p))
+        def evaluate_inhomog(r, M, p, mu, f, beta, omega1, nu):
+                nuR_here = nuR(r, p, M)
+                jsquare = j_square(f, nu)
+                jsquarederiv = j_square_deriv(M, r, nu, nuR_here, mu, f)
+                term1 = .5 * nuR_here * r
+                term2 = 1 / ((r - 2*M) * nuR_here)
+                return 1/3 * (r * omega1)**2 * (.5 * (term1 - term2) / r * jsquare * beta**2   -
+                                              (term1 + term2) * jsquarederiv )
 
-        m2 = _m2(r, M, nu, p, mu(p), omega1, beta, h2)
-        f = 1 - 2 * M / r  
-        def evaluate(r, K2, h2, M, p, m2, mu, f, beta, omega1, nu):
-            x0 = 4*pi*r**3
-            x1 = 2*r
-            return (K2*x1 + 3*M*h2 - h2*mu*x0 + h2*x1)/(r*(-M - f*r + p*x0 + r))
-        output=  evaluate(r, K2, h2, M, G/c**2*p, m2, G/c**2*mu(p), f, beta, omega1, nu)
-        print("k2 is", output)
-        return output
+        inhomog_part = evaluate_inhomog(r, M, G/c**2*p, G/c**2*mu(p), f, beta, omega1, nu)
+        return homog_part + inhomog_part
+
 
 
 def eqsdict(): # dictionary linking NS properties with corresponding equation of stellar structure
         
         return {'R': hydro,'M': mass,'Lambda': equad,'I': slowrot_logderiv,'Mb': baryonmass, 'H': derivativeofpsi, 'omega': W,
-                'v': V, 'framedrag' : slowrot_framedrag ,  'nu' : nu_metric_param, 'K2' : quadratic_K2,
-                'h2' : quadratic_h2, 'h2_homog' : quadratic_h2_homog, 'K2_homog' : quadratic_K2_homog}
+                'v': V, 'framedrag' : slowrot_framedrag ,  'nu' : nu_metric_param, 'v2' : quadratic_v2,
+                'h2' : quadratic_h2, 'h2_homog' : quadratic_h2_homog, 'v2_homog' : quadratic_v2_homog}
 
 # INITIAL CONDITIONS
 
-def initconds(pc, muc ,cs2ic, rhoc, psic, stp, props): # initial conditions for integration of eqs of stellar structure
-
+def initconds(pc, muc ,cs2ic, rhoc, psic, stp, props, nu_adjustment=0.0):
+        """ 
+        initial conditions for integration of eqs of stellar structure
+        """
         Pc = pc - 2.*np.pi*G*stp**2*(pc+muc)*(3.*pc+muc)/(3.*c**2)
         mc = 4.*np.pi*stp**3*muc/3.
         Lambdac = 2.+4.*np.pi*G*stp**2*(9.*pc+13.*muc+3.*(pc+muc)*cs2ic)/(21.*c**2)
@@ -261,15 +249,24 @@ def initconds(pc, muc ,cs2ic, rhoc, psic, stp, props): # initial conditions for 
         Wc = 1e-14*stp**3
         Vc = -(1e-14*stp**2) / 2
         beta = 16.*pi * G/c**2 * stp**2 * (pc + muc) / 5.
-        frame_drag = 1.0
-        nu = 2.*np.pi*G*stp**2*(3.*pc+muc)/(3.*c**2)
-        h2 = 1e-10 * stp**2 # 1.0 is a test value, something else may lead to better convergence 
-        K2 = -1e-10 * stp**2
-        h2_homog = 1e-10*stp**2 # really is q*stp**2 with q = 1.0
-        K2_homog = -1e-10*stp**2
+        frame_drag = 1e-8
+        nuc = 0.0 + nu_adjustment
+        # Need to compute these 
+        A= 1e-4 * frame_drag**2 # needs to be small compared to inhomogenous part of B
+        # for numerical reasons I'm not sure I understand
+        fc = 1 - 2*G*mc/c**2/stp
+        jc = np.sqrt(fc)*np.exp(-nuc/2)
+        B_homog = - 2*pi * G/c**2 * (pc + 1/3*muc) * A
+        B = B_homog - fourpi/3 * G/c**2*(pc + muc) * (jc * frame_drag)**2
+        print("B_homog is", B_homog)
+        print("B_inhomog is", fourpi/3 * G/c**2*(pc + muc) * (jc * frame_drag)**2)
+        h2 =  A * stp**2 # 1.0 is a test value, something else may lead to better convergence 
+        v2 =  B * stp**4
+        h2_homog = A*stp**2 # really is q*stp**2 with q = 1.0
+        v2_homog = B_homog*stp**4
         
-        return {'R': Pc,'M': mc,'Lambda': Lambdac,'I': omegac, 'Mb': mc, 'H': psic, 'omega': Wc, 'v': Vc, 'beta' : beta, 'framedrag' : frame_drag, 'nu':  nu, 'h2' : h2, 'K2' : K2, 'h2_homog'
-        : h2_homog, 'K2_homog' : K2_homog}
+        return {'R': Pc,'M': mc,'Lambda': Lambdac,'I': omegac, 'Mb': mc, 'H': psic, 'omega': Wc, 'v': Vc, 'beta' : beta, 'framedrag' : frame_drag, 'nu':  nuc, 'h2' : h2, 'v2' : v2,
+                'h2_homog': h2_homog, 'v2_homog' : v2_homog}
 
 # SURFACE VALUES
 
@@ -349,23 +346,58 @@ def calcobs(vals,omega,props): # calculate NS properties at stellar surface in d
                     betaR = vals[props.index('I')+1]
                     omega1 = vals[props.index('framedrag')+1]
                     h2_homog = vals[props.index('h2_homog')+1]
-                    K2_homog = vals[props.index('K2_homog')+1]
+                    v2_homog = vals[props.index('v2_homog')+1]
                     h2 = vals[props.index('h2')+1]
-                    K2 = vals[props.index('K2')+1]
+                    v2 = vals[props.index('v2')+1]
+                    K2_homog = v2_homog - h2_homog
+                    K2 = v2 - h2
                     f = 1.0 - 2.0  * M / R
                     # Associated Legendre function of 2nd kind Q^2_2(R/M - 1)
-                    Q22 = 3 * R / (M * f) *  (np.polyval ([1, -3, 4/3, 2/3], M/R)  + R/(2*M) * f**2 * np.log(f))
+                    Q22 = -3 * R / (M * f) *  (np.polyval([2/3, 4/3, -3, 1], M/R)  + R/(2*M) * f**2 * np.log(f))
                     # set up a linear system to solve a * (q; A) = b
-                    a = np.zeros((2,2))
-                    a[0, 0] = h2_homog
-                    a[0, 1] = K2_homog
-                    a[1, 0] = Q22
-                    a[1, 1] = 3 * R / M * (np.polyval([1, 1, -2/3], M/R) + R/(2*M) * (1-2*M**2/R**2) * np.log(f))
+                    # a = np.zeros((2, 2))
+                    # a[0, 0] = h2_homog
+                    # a[1, 0] = K2_homog
+                    # a[0, 1] = -Q22
+                    # a[1, 1] = -3 * R / M * (np.polyval([-2/3 , 1, 1], M/R) + R/(2*M) * (1-2*M**2/R**2) * np.log(f))
 
-                    # How much the particular solution missed the external solution
-                    b = np.array([1/(M*R**3) * (1+M/R) * S**2 - h2, 1/(M * R**3) * (1 + 2*M/R)*S**2 - K2]) 
+                    # # How much the particular solution missed the external solution
+                    # b = np.array([1/(M*R**3) * (1+M/R) * S**2 - h2, -1/(M * R**3) * (1 + 2*M/R)*S**2 - K2]) 
+                    #print(a)
+                    # Analytical exterior solution -- no A dependence "inhomogenous"
+                    def  diffh_I(M, R, S):
+                            return S**2*(-4*M - 3*R)/(M*R**5)
+                    # Analytical exterior solution -- A dependent terms (all linear in A)
+                    def diffh_A( M, R, S):
+                            x0 = M**2
+                            x1 = R**2
+                            x2 = R**4
+                            x3 = R**3
+                            x4 = M**3
+                            x5 = log((-2*M + R)/R)
+                            return (-2.66666666666667*M**5 + 2.66666666666667*M**4*R + 10.0*M*x2*x5 - 4.0*M*x2 - 2.0*R**5*x5 - 16.0*x0*x3*x5 + 16.0*x0*x3 + 8.0*x1*x4*x5 - 17.3333333333333*x1*x4)/(x0*x1*(-8.0*M*R + 8.0*x0 + 2.0*x1))
+                    def evaluate_inhomog_h(r, M, p, mu, f, beta, omega1, nu):
+                        nuR_here = nuR(r, p, M)
+                        jsquare = j_square(f, nu)
+                        jsquarederiv = j_square_deriv(M, r, nu, nuR_here, mu, f)
+                        term1 = .5 * nuR_here * r
+                        term2 = 1 / ((r - 2*M) * nuR_here)
+                        return 1/3 * (r * omega1)**2 * (.5 * (term1 - term2) / r * jsquare * beta**2   -
+                                              (term1 + term2) * jsquarederiv )
 
-                    sol = np.linalg.solve(a, b)
+                    Z = np.zeros((2, 2))
+                    Z[0, 0] = h2_homog
+                    Z[1, 0] =  _h2_homog_helper(R, v2_homog, h2_homog, M, 0, 0)
+                    Z[0, 1] = -Q22
+                    Z[1, 1] = -diffh_A(M, R, S)
+
+                    P=np.array([1/(M*R**3) * (1+M/R) * S**2 - h2,
+                                -(evaluate_inhomog_h(R, M, 0, 0, 1-2*M/R, betaR, omega1, log(1-2*M/R))+ _h2_homog_helper(R, v2, h2, M, 0, 0)) + diffh_I(M, R, S) ])
+                    sol = np.linalg.solve(Z,P)
+
+                    
+                    
+                    print(sol)
                     return sol[1]
                 R = vals[0]
                 M = G / c**2 * vals[props.index('M')+1]
@@ -373,9 +405,15 @@ def calcobs(vals,omega,props): # calculate NS properties at stellar surface in d
                 omega1 = vals[props.index('framedrag')+1]
                 chi = 1 / (6 * M**2) *  omega1 * R**3 * betaR
                 A = _A_from_vals(vals, chi*M**2)
-                return -1 - 8 * A / (5*chi**2)
-        store = lambda x : (lambda _  : vals[props.index(x) + 1])
-                
-        return {'R': Rkm,'M': MMsun,'Lambda': Lambda1,'I': MoI, 'Mb': MbMsun, 'H': PsiC, 'omega': BC, 'v': BC, 'framedrag': store("framedrag"), 'nu' : store("nu"), 'h2': Quadrupole, 'h2_homog':store("h2_homog"), 'K2':store("K2"), 'K2_homog':store("K2_homog")}       
+                print ("chi is computed as", chi)
+                return 1 + 8 * A / (5*chi**2)
+        store = lambda x : (lambda vals  : vals[props.index(x) + 1])
+        
+
+
+
+        print(vals)        
+        return {'R': Rkm,'M': MMsun,'Lambda': Lambda1,'I': MoI, 'Mb': MbMsun, 'H': PsiC, 'omega': BC, 'v': BC, 'framedrag': store("framedrag"), 'nu' : store("nu"), 'h2': Quadrupole,
+                'h2_homog':store("h2_homog"), 'v2':store("v2"), 'v2_homog':store("v2_homog")}       
 
         
